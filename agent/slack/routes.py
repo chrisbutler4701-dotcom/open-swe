@@ -9,6 +9,7 @@ from fastapi import APIRouter, Response
 from langgraph_sdk.client import LangGraphClient
 
 from agent.expedited_review import slack as expedited_review
+from agent.review_guide.sessions import ReviewGuideSession
 from agent.slack import webhook as service
 from agent.slack.allowed_bots import resolve_allowed_slack_bot
 from agent.slack.ask import (
@@ -179,7 +180,8 @@ async def _queue_channel_housekeeping(channel_id: str, text: str) -> None:
         )
     except common.SlackThreadMappingError:
         return
-    if not thread_id or not text.strip():
+    # Only the main agent drains the queue; a review guide would leave it for one to pick up.
+    if not thread_id or not text.strip() or await ReviewGuideSession.exists(thread_id):
         return
     await common.queue_message_for_thread(
         thread_id,
