@@ -1,11 +1,11 @@
 ---
 type: architecture
 title: Coding Agent Assembly
-description: How the primary Deep Agents coding graph is assembled for an executable thread run, including configuration, model policy, sandbox and skills backends, tool surfaces, subagents, and run preparation.
-tags: [agent-graph, deep-agents, langgraph, middleware, subagents, sandbox, tools]
+description: How Open SWE assembles the primary Deep Agent for an executable thread run, from tolerant run configuration through sandbox, model, context, tools, subagent, and durable preparation state.
+tags: [agent-graph, deep-agents, langgraph, middleware, sandbox, tools]
 verified:
   - by: openwiki/0.4.2
-    at: 2026-09-08T08:15:30.533Z
+    at: 2026-09-29T08:16:15.658Z
 sources:
   - id: openwiki-source-8c60a9544ea26006748dd7a3
     resource: repo://agent/desktop.py
@@ -13,8 +13,6 @@ sources:
     resource: repo://agent/graphs/agent.py
   - id: openwiki-source-9103280889fa6c4d9c5bb0df
     resource: repo://agent/middleware/dynamic_tools.py
-  - id: openwiki-source-f26d060fb4408e89b50964a5
-    resource: repo://agent/middleware/plan_mode.py
   - id: openwiki-source-de97adb0acb9dec0664a44b6
     resource: repo://agent/middleware/prepare_run.py
   - id: openwiki-source-10938886c8b24d0cdc72ad9e
@@ -35,97 +33,98 @@ sources:
     resource: repo://tests/agent/test_factory_tool_loading.py
   - id: openwiki-source-36e029ef147f9810c97b2c29
     resource: repo://tests/models/test_agent_subagent_models.py
-generated: { by: "openwiki/0.4.2", at: "2026-09-08T08:15:30.533Z" }
+generated: { by: "openwiki/0.4.2", at: "2026-09-29T08:16:15.658Z" }
 ---
 
 # Coding Agent Assembly
 
-`get_agent(config)` in `agent/server.py` is the composition boundary for the primary coding agent. For an executable thread run, it resolves durable thread settings and sender-scoped authority, starts a thread backend, then supplies the resulting models, curated tools, subagents, skills, backend, and ordered middleware to `create_deep_agent`. The `agent` deployment entrypoint in `langgraph.json` is `agent.graphs.agent:traced_agent`, which currently re-exports this factory.
+`get_agent(config)` is the deployment-facing factory for the primary coding graph. The `agent` entry in `langgraph.json` points to `agent.graphs.agent:traced_agent`, which re-exports `get_agent`. For an executable, thread-bound request, the factory delegates to `build_agent`: it starts the thread backend early, resolves durable settings and sender authority, then passes models, a backend, skills, tools, a general-purpose subagent, and middleware to `create_deep_agent`.
 
-## Load gate and configuration contract
+## Execution gate and configuration
 
 ```mermaid
 flowchart TD
     Load["LangGraph loads agent graph"] --> Gate{"Thread id and execution flag"}
-    Gate -- no --> Bare["Bare Deep Agent"]
-    Gate -- yes --> Start["Start thread sandbox proxy"]
-    Start --> Resolve["Resolve settings models and authorization"]
-    Resolve --> Surface["Build backend skills tools and subagent"]
-    Surface --> Stack["Install middleware"]
+    Gate -- "no" --> Bare["Bare Deep Agent"]
+    Gate -- "yes" --> Backend["Start cached thread backend"]
+    Backend --> Resolve["Resolve settings authorization and models"]
+    Resolve --> Assemble["Build tools skills backend and subagent"]
+    Assemble --> Stack["Install middleware and bind config"]
     Stack --> Ready["Configured Deep Agent"]
 ```
-The executable-run gate separates inexpensive graph discovery from thread-bound agent assembly.
+The execution gate separates graph discovery from costly thread-bound assembly.
 
-The factory sets the LangGraph recursion limit to `DEFAULT_RECURSION_LIMIT`. Full assembly requires both `configurable.thread_id` and `configurable.__is_for_execution__ is True`; otherwise it returns `create_deep_agent(system_prompt="", tools=[])`, with no supplied backend or middleware. The returned graph is bound using `bindable_config`, which removes `__pregel_*` runtime internals so a read-time runtime is not serialized into later invocations.
+`build_agent` sets `DEFAULT_RECURSION_LIMIT`. It returns `create_deep_agent(system_prompt="", tools=[])` when `configurable.thread_id` is absent or `__is_for_execution__` is not exactly `True`; this avoids sandbox creation and custom middleware while LangGraph reads graph metadata. In either path it calls `with_config(bindable_config(config))`, stripping `__pregel_*` values. Those runtime-provided objects must not be captured into a reusable graph because they are not serializable for later state reads.
 
-`RunConfig` is the tolerant boundary around `configurable`: all declared fields are optional, unknown keys survive round trips, and parsing drops only invalid fields rather than losing an otherwise usable run configuration. This matters because different launchers and graph types add distinct keys.
+`RunConfig` is the defensive boundary for `configurable`, a mapping assembled by webhooks, dashboard, and cron paths. Its declared fields are optional, extras are preserved, and `parse` drops only fields which fail validation. Thus one malformed value does not discard a usable `thread_id` or unrelated launcher data.
 
-## Assembly flow and ownership
+## Factory control flow and sandbox choice
 
-`profile_login` is the person who triggered this run. It controls authorization and credentialed integrations. In contrast, model choices and repository instructions are loaded from thread settings—initially seeded from a profile and then retained by the thread—so a later participant does not silently replace durable decisions.
+`profile_login` represents the sender who initiated this run and drives authorization. Thread settings are different: they are seeded from a profile for a new hosted thread and then persist on that thread, so a later participant does not replace its model policy merely by posting.
 
-The factory creates a cached `SandboxBackendProxy` and starts its reconnect task before resolving the rest of the graph surface. Desktop reconnects to a `LocalShellBackend`; hosted runs call `ensure_sandbox_for_thread` with the configured environment. That lifecycle uses a cached backend when available, otherwise reconnects the sandbox id recorded in thread metadata, refreshes proxy credentials, or creates and binds a new sandbox. It deliberately raises for an unreachable existing sandbox rather than replacing potentially uncommitted work; a deleted sandbox is replaced because retaining its stale id would permanently block the thread.
+The factory creates a cached sandbox proxy and calls `start()` before settings and integrations are loaded. Its reconnect callback selects `LocalShellBackend` for `source == "desktop"`; hosted runs call `ensure_sandbox_for_thread(thread_id, workspace_slug=...)`. Desktop validates that `local_project_path` is either a registered project or a managed worktree before exposing it as the shell root.
 
-## Model and profile policy
+For hosted threads, sandbox lifecycle is intentionally conservative. It reuses a cached connection or reconnects the sandbox id in thread metadata, refreshes the GitHub proxy and git identity, or creates and persists a sandbox when none is bound. An unreachable existing sandbox raises rather than silently replacing uncommitted work. A deleted sandbox is recreated because its stale id would otherwise permanently prevent future runs; selected callers can explicitly allow replacement of an unreachable re-derivable sandbox.
 
-Main and general-purpose-subagent model/effort pairs resolve in this order:
+## Settings, model policy, and persistence
 
-1. Team defaults.
-2. Dashboard profile overrides, including a separate subagent override when provided.
-3. Stored thread settings.
-4. A per-run `agent_model_id` and `agent_effort` pair, only after canonicalization and validation against `SUPPORTED_MODEL_IDS` and `model_supports_effort`.
+The main and general-purpose-subagent model/effort pairs resolve by precedence:
 
-The accepted per-run pair becomes the main and subagent pair and is stored with repository instructions for hosted runs. The Fable availability gate is deliberately applied *after* storage, so a deployment-wide enablement decision is evaluated each run instead of frozen into thread settings. Provider-specific keyword arguments are computed separately for main, subagent, and title models. Construction failures are deferred into an error model, allowing the graph to compile and reporting provider setup failure at model-call time. A fallback middleware is installed only if its model id differs from the primary model.
+1. Workspace defaults (desktop uses local defaults).
+2. Dashboard profile overrides; a profile may separately override the subagent.
+3. Stored thread settings, including routing settings.
+4. A canonicalized per-run `agent_model_id` plus `agent_effort`, only when the model is supported and accepts that effort.
 
-## Prompt and per-run preparation
+The accepted per-run pair applies to both main and subagent and is stored in hosted thread settings with repository instructions and routing choices. The Fable availability gate is applied **after** that persistence, preserving a deployment-wide switch as a per-run decision. Slack ask runs disable adaptive routing; otherwise adaptive routing may add `ModelSelectionMiddleware` with configured route models. The factory records resolved model information in `configurable` and graph metadata. Provider construction failures are represented by deferred error models so assembly can complete and the failure is reported at call time. A fallback model middleware is installed only when its id differs from the primary model.
 
-The factory gives `create_deep_agent` an empty static system prompt. `PrepareAgentRunMiddleware` renders the per-thread prompt in its before-agent hook into `rendered_system_prompt`; its base class prepends that content to every model request and wraps it as authoritative system instructions.
+## Backend, skills, and offloaded artifacts
 
-`construct_system_prompt` builds the main-agent layer in a fixed order: working environment, dashboard/source context, plan guidance, self-awareness, default repository, optional repository scope, repository setup and task execution, optional Corridor guidance, dependency and untrusted-comment guidance, commit/PR guidance, repository instructions, environment instructions, optional admin-environment guidance, and shared-base guidance. `render_open_swe_shared_base` appends `OPEN_SWE_SHARED_BASE` and conditionally adds sandbox-download guidance. Sender identity, commit attribution, standing user instructions, and participant context are intentionally excluded from this durable prompt layer.
+The agent backend is a `CompositeBackend` whose default is the sandbox proxy. It overlays read-only routes for bundled skills and, in hosted runs, organization skills held in the LangGraph store. Hosted user skills are added only when a private credential login is available and are namespaced by that login; desktop instead exposes a read-only `StateBackend` user-skill snapshot. The resulting ordered `skill_sources` is supplied to both parent and general-purpose subagent.
 
-For hosted runs, preparation resolves the GitHub token, triggering identity, sandbox work directory, environment, sender instructions, and thread participants. It adds the resulting sender context as a separate generated input after a human message, identifies the latest attributed human sender, and does not re-add a context hash still visible after history summarization. This avoids rewriting cached user history and scopes sender-specific metadata to the relevant turn. A sandbox-unreachable failure also posts a user-facing notification before being re-raised.
+Desktop adds routes for the Deep Agents virtual `/large_tool_results/` and `/conversation_history/` directories. They lead to an artifact root keyed by sanitized thread id outside the selected project, preventing history and tool-result offloads from showing up as git changes.
 
-Preparation is checkpointed. `run_prepared_for` fingerprints the middleware class, latest message, and configuration; a resumed attempt with the same fingerprint skips setup, while a later invocation re-prepares fresh credentials, prompt, and context. Preparation implementations must be idempotent because failure before checkpoint persistence permits a retry.
+## Prompt and durability-facing preparation
 
-## Backend and skills
+The graph is assembled with an empty static `system_prompt`. `PrepareAgentRunMiddleware` creates `rendered_system_prompt` in its `before_agent` phase, and its base middleware prepends that rendered text as a system message on each model call. `construct_system_prompt` delegates the ordered main template to `system/main`, incorporating the working directory and environment, dashboard/source guidance, configured default prompt and repository boundary, collaboration and untrusted-comment guidance, repository and workspace instructions, recent thread context, admin workspace guidance, and conditional sandbox-download guidance.
 
-The primary backend is a `CompositeBackend` whose default route is the sandbox proxy. It overlays read-only skill routes:
+```mermaid
+sequenceDiagram
+    participant Graph as Deep Agent graph
+    participant Prepare as PrepareAgentRunMiddleware
+    participant Sandbox as Sandbox backend
+    participant Thread as Thread service
+    participant Model as Model call
+    Graph->>Prepare: before agent
+    Prepare->>Sandbox: await backend and resolve work directory
+    Prepare->>Thread: resolve identity participants and record run
+    Prepare->>Prepare: render prompt and sender context
+    Prepare->>Graph: checkpoint preparation state
+    Graph->>Model: prepend rendered system prompt
+```
+The preparation hook resolves fresh thread-specific context before model calls and checkpoints its completion.
 
-- Bundled skills are served from a virtual `FilesystemBackend`.
-- Hosted organization skills come from a store namespace shared by the organization.
-- Hosted user skills come from a store namespace scoped to `profile_login` when one exists.
-- Desktop user skills instead use a read-only `StateBackend` snapshot.
+Hosted preparation resolves the GitHub token, triggering identity, sandbox work directory, workspace, participant blocks, and optional recent-thread context. It identifies the sender from the latest human message, only appends participant context blocks not already visible in history, and records run model/source metadata and invocation usage on a best-effort basis. Sandbox attachment failures notify the user before being re-raised.
 
-The ordered `skill_sources` list is supplied to both the parent and the general-purpose subagent. Desktop additionally routes `/large_tool_results/` and `/conversation_history/` to a thread-specific artifact directory outside the selected project, preventing Deep Agents history and tool-result offloads from becoming repository changes.
+`BasePrepareRunMiddleware` persists `run_prepared` and `run_prepared_for` in graph state. The fingerprint combines middleware type, latest-message content, and configuration. A resumed attempt with the same fingerprint skips setup; a later invocation re-prepares fresh credentials and context. Because a failure before checkpoint persistence can execute preparation again, implementations must be idempotent. These state fields are omitted from user-visible output but form the durability latch for preparation.
 
-## Curated and dynamic tools
+## Tools and independent subagent
 
-The parent gets a curated static tool list. Slack tools require trusted Slack or schedule source context with a channel and thread timestamp. Authorized admin threads add environment, organization-skill, sandbox-reset, and automation controls. Sandbox download/service URL tools require the LangSmith sandbox provider and are omitted for desktop and stop-summary runs. Desktop is restricted to `http_request`, `fetch_url`, and `web_search`; stop-summary mode is restricted to Slack read and reply.
+The parent starts with a curated static surface: web and background work, plan/user/thread/sandbox/PR/automation operations, and conditionally service/download, Slack, admin, private-admin, and bridge-result tools. Personal settings and user skill tools require a known private credential scope; channel-history reads additionally require a private thread. Thread-bound Slack tools require trusted source context with channel and thread identifiers. Desktop replaces the surface with `http_request`, `fetch_url`, and `web_search`; stop-summary replaces it with Slack thread reading and reply.
 
-`ExcludeToolsMiddleware` removes Deep Agents' `grep` in normal runs. In stop-summary mode it also removes mutating filesystem and delegation tools. Plan mode applies a distinct filter that removes delegation and external mutation—including `task`, browser actions, HTTP requests, PR/thread/sandbox operations, and selected Slack, Linear, skill, environment, and automation tools. File editing and `execute` remain available, so the plan-mode shell read-only expectation is prompt-enforced rather than a hard execution boundary.
+`ExcludeToolsMiddleware` removes the selected Deep Agents tools at runtime. Its exclusion set varies for stop summaries, Slack asks, and automatic incident sweeps, where actions such as delegation or mutation may be removed even if they were initially registered. The run also installs input/image validation, tool-error conversion, task retry, PR/workflow guards, GitHub proxy refresh, message-queue checks, reply/CLI-result requirements when applicable, usage and step-limit handling.
 
-Integration schemas are exposed through `DynamicToolMiddleware`, not appended directly to the static list. Observability, Currents, and Notion tools are eagerly loaded during factory assembly (with loader failures and timeouts yielding no tools); their schemas become usable only after `load_integration_tools`. Browser tools are also a dynamic group and do **not** create a browser subagent. Corridor provides a static name catalog and defers its MCP handshake until the agent selects a Corridor tool. The middleware resets selected integration tools at run start, prevents direct calls before selection, serializes construction per group, and reserves static/Deep Agent names to reject collisions.
+MCP and Notion tools are loaded concurrently during factory assembly only for non-desktop, non-stop-summary runs with known credential scope. They are exposed through `DynamicToolMiddleware`: the model must call `load_integration_tools` before calling a connected tool. The middleware resets selected integrations at run start, rejects name collisions with static and Deep Agent tools, serializes each group build, and turns loader failures into unavailable-tool results. It can preserve provider prompt caches by anchoring native tool additions after the load result.
 
-## Plan mode and subagent boundary
+The configured `general-purpose` subagent is a separately compiled fork. It receives the same skills, its own model, transcript, dynamic tools, conversation offloading, provider guards and applicable workflow/PR guards. Parent middleware therefore does not automatically protect it. `_SubagentToolGuard` blocks Slack and other parent-context-sensitive operations at call time (while source-free channel reads may remain), and its inherited-middleware exclusions prevent parent reply and selection behavior from being applied to the fork. Changes to a parent-only restriction should be reviewed against this boundary.
 
-`PlanModeMiddleware` is installed for every graph. At run start it resets `plan_mode` in state to the factory's `configurable.plan_mode is True` value, preventing stale state from a prior run leaking forward. It filters every model request, so `enter_plan_mode` can restrict the very next turn in the same run. Excluding `task` is essential: the general-purpose subagent compiles as an independent graph and does not inherit the parent's plan-mode filter.
+## Middleware ordering and operational consequences
 
-The only configured subagent is the Deep Agents general-purpose subagent. It receives the Open SWE shared base plus Deep Agents task mechanics, the same ordered skills, static tools excluding background execution/tasks and parent-context-sensitive Slack/thread/user-settings tools, and a description requiring Slack communication to be relayed through the parent. Because it compiles independently, parent middleware does not wrap it. It therefore receives its own dynamic-tool and exclusion middleware, workflow-push guard, OpenAI response sanitization, model-error handling, and model-call timeout.
+Middleware is passed outermost to innermost. `ConversationOffloadingMiddleware` and `PrepareAgentRunMiddleware` occur first, followed by transcript/incident/workspace-skill context and input/tool controls. Guards and proxy/message-queue handling follow; timeout wrap-up, reply requirements, notifications, usage, optional model selection/fallback, and dynamic tools follow them. Provider/message sanitizers, stable tool-result ordering, `ModelErrorMiddleware`, and `ModelCallTimeoutMiddleware` are innermost. The innermost timeout covers the provider call and can propagate to outer fallback middleware. The factory relies on `create_deep_agent`'s built-in `PatchToolCallsMiddleware` rather than adding a redundant orphaned-tool-call repairer.
 
-## Middleware order is behavior
-
-The supplied parent list is ordered outermost to innermost:
-
-1. `PrepareAgentRunMiddleware`, then optional `DynamicToolMiddleware`.
-2. Input sanitation, `ModelCallLimitMiddleware`, tool-error conversion, tool exclusion, subdirectory reads, and retry for `task`.
-3. PR/workflow guards, GitHub proxy refresh, and—outside stop summaries—message-queue checking.
-4. Timeout wrap-up, step-limit notification, usage recording, optional model fallback, and plan-mode filtering.
-5. Provider/thinking sanitizers, stable tool-result ordering, model-error handling, then `ModelCallTimeoutMiddleware`.
-
-The innermost timeout measures the provider call itself and can propagate outward to the fallback model. The call limit ends the run at `MODEL_CALL_RECURSION_LIMIT`; task retry sits inside `ToolErrorMiddleware`. `create_deep_agent` supplies its own `PatchToolCallsMiddleware`, so the factory must not add the obsolete custom orphaned-tool-call repairer.
+When a dashboard JWT and tools base URL are configured for a hosted normal assembly, the factory saves tool context for the thread after graph creation. Test-oriented `tool_surface` assembly instead returns the graph plus its dynamic middleware and exclusion set without starting the backend.
 
 ## Change guidance and focused tests
 
-Treat `get_agent` as the customization seam for sandbox providers, model policy, parent tools, skills routes, subagents, and middleware. Preserve the execution gate, the distinction between triggering-sender authority and durable thread settings, and the subagent boundary: a parent-only guard does not secure a separately compiled subagent.
+Treat `build_agent` as the assembly seam for changing model policy, backends, tool visibility, skill routes, subagent behavior, or middleware. Preserve the execution gate, the separation of initiating-sender authority from durable thread choices, early backend startup, and the independent-subagent boundary. In particular, do not broaden a static tool list without reviewing its runtime exclusions and subagent guard.
 
-`tests/agent/test_agent_assembly_context.py` checks backend/skills routing, desktop and stop-summary tool surfaces, parent-only tools, subagent guards, and middleware order. `tests/agent/test_factory_tool_loading.py` verifies parallel eager loading. `tests/models/test_agent_subagent_models.py` covers independent profile subagent overrides and Fable gating. Related material: [Middleware Stack](middleware-stack.md), [Sandbox Lifecycle](sandbox-lifecycle.md), [Models & Profiles](../concepts/models-profiles-instructions.md), [Tools](../concepts/tools.md), and [Context Engineering](../workflows/context-engineering.md).
+`tests/agent/test_agent_assembly_context.py` captures factory arguments to verify public/private skill and tool routes, eager sandbox startup, sender draft preference, Slack visibility, private admin tools, and parent-only subagent behavior. `tests/agent/test_factory_tool_loading.py` verifies that MCP and Notion loading is concurrent. `tests/models/test_agent_subagent_models.py` verifies profile inheritance and Fable gating. See also [Middleware Stack](middleware-stack.md), [Sandbox Lifecycle](sandbox-lifecycle.md), [Models, Profiles, and Instructions](../concepts/models-profiles-instructions.md), [Threads and State](../concepts/threads-and-state.md), and [Tools](../concepts/tools.md).

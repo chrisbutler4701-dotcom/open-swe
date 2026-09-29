@@ -1,7 +1,7 @@
 # Files
 
-- [Coding Agent Assembly](agent-graph.md) - How the primary Deep Agents coding graph is assembled for an executable thread run, including configuration, model policy, sandbox and skills backends, tool surfaces, subagents, and run preparation.
-- [Middleware and Failure Boundaries](middleware-stack.md) - Ordering-sensitive middleware around the coding agent and reviewer model and tool loops. Explains preparation, policy, retries, deadlines, completion hooks, and how failures become safe user-visible outcomes.
-- [Runtime and Product Architecture](overview.md) - LangGraph deployment, graph entrypoints, FastAPI ingress, durable dispatch, sandbox ownership, and the dashboard and desktop product surfaces.
-- [Review and Style Analysis Graphs](reviewer-and-analyzer.md) - Architecture of the isolated reviewer and review-style analyzer graphs, including repository preparation, durable finding reconciliation and publication, per-repository style persistence, and continual analysis scheduling.
-- [Thread Sandbox Lifecycle](sandbox-lifecycle.md) - How a thread acquires, persists, reconnects to, and deliberately replaces its sandbox. Covers provider selection, proxy-backed credentials, recovery safety, and operational lifecycle controls.
+- [Coding Agent Assembly](agent-graph.md) - How Open SWE assembles the primary Deep Agent for an executable thread run, from tolerant run configuration through sandbox, model, context, tools, subagent, and durable preparation state.
+- [Agent Middleware and Failure Boundaries](middleware-stack.md) - The ordered middleware envelopes around the coding agent and reviewer loops, including preparation, tool and delivery policy, follow-up delivery, model recovery, and completion guarantees.
+- [Runtime and Product Architecture](overview.md) - How LangGraph graph factories, the FastAPI ingress application, durable dispatch, thread-scoped execution context, and cloud and desktop clients fit together.
+- [Reviewer, Review Scout, and Style Analyzer](reviewer-and-analyzer.md) - Architecture of the read-only pull-request reviewer, its walkthrough-producing review scout, and the analyzer that persists repository-specific review guidance. Covers durable findings, publication and reconciliation, scout lifecycle, and continual style learning.
+- [Thread Sandbox Lifecycle](sandbox-lifecycle.md) - Defines how a thread persists and reuses its sandbox, including workspace provisioning, proxy-backed GitHub access, safe recovery, explicit replacement, and local-machine bridges.
