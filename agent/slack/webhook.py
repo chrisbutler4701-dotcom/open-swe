@@ -32,6 +32,8 @@ from agent.input_messages import (
     visible_dynamic_context_hashes,
 )
 from agent.prompts import load_prompt
+from agent.review_guide.sessions import ASSISTANT_ID as REVIEW_GUIDE_ASSISTANT_ID
+from agent.review_guide.sessions import ReviewGuideSession
 from agent.run_config import Repo
 from agent.slack import client as slack_utils
 from agent.slack.allowed_bots import AllowedSlackBot, resolve_allowed_slack_bot
@@ -101,6 +103,7 @@ async def _dispatch_or_queue_slack_run(
     *,
     explicitly_tagged: bool,
     trigger_ts: str,
+    assistant_id: str = "agent",
 ) -> dict[str, Any]:
     """Dispatch explicit requests immediately and enqueue other Slack follow-ups."""
     if isinstance(run_input, list):
@@ -113,6 +116,7 @@ async def _dispatch_or_queue_slack_run(
             source="slack",
             thread_title=None,
             input=run_input,
+            assistant_id=assistant_id,
             metadata={**common.AGENT_VERSION_METADATA, "slack_trigger_ts": trigger_ts},
             client=client,
             multitask_strategy="interrupt" if explicitly_tagged else "enqueue",
@@ -1013,12 +1017,13 @@ async def _process_slack_mention_impl(
     channel_identity = await _slack_channel_identity(
         channel_id, thread_ts, channel_context, thread_id=thread_id, repo=repo
     )
+    review_guide = code_channel and await ReviewGuideSession.exists(thread_id)
     # Guidance that holds for the whole thread, deduped by content so the model
     # is told once; only what this turn adds travels as a message.
     constant_context = "\n\n".join(
         section
         for section in (
-            _CODE_CHANNEL_CONTEXT if code_channel else "",
+            _CODE_CHANNEL_CONTEXT if code_channel and not review_guide else "",
             _CONCIERGE_CONTEXT if concierge_mode else "",
         )
         if section
@@ -1169,6 +1174,7 @@ async def _process_slack_mention_impl(
             configurable,
             explicitly_tagged=explicitly_tagged,
             trigger_ts=event_ts,
+            assistant_id=REVIEW_GUIDE_ASSISTANT_ID if review_guide else "agent",
         )
     except Exception:
         # No run means no completion webhook, so nothing else would ever clear
