@@ -10,6 +10,7 @@ from langgraph_sdk.client import LangGraphClient
 
 from agent.expedited_review import slack as expedited_review
 from agent.human_review import slack as human_review
+from agent.review_guide.launch import close_guide_for_channel
 from agent.review_guide.sessions import ReviewGuideSession
 from agent.slack import webhook as service
 from agent.slack.allowed_bots import resolve_allowed_slack_bot
@@ -319,6 +320,12 @@ async def slack_webhook(
     event_id = envelope.event_id
     team_id = envelope.team_id or event.team
     channel_id = event.resolve_channel_id()
+    # Checked before eligibility: an archived channel may no longer read as operable.
+    if channel_id and (
+        event.type == "channel_archive"
+        or (event.type == "message" and event.subtype == "channel_archive")
+    ):
+        background_tasks.add_task(close_guide_for_channel, channel_id)
     channel_context: SlackChannelContext | None = None
     if channel_id:
         channel_context = await common.resolve_slack_channel_context(channel_id, use_cache=False)
