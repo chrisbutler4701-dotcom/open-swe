@@ -1325,6 +1325,13 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         _thread_id: str = thread_id,
         _cfg: RunConfig = cfg,
     ) -> SandboxBackendProtocol:
+        if proposal_only:
+            sandbox_id = (config.get("metadata") or {}).get("sandbox_id")
+            if not isinstance(sandbox_id, str) or not sandbox_id:
+                raise ValueError("proposal-only runs require a bound sandbox_id")
+            from agent.sandboxes.providers.registry import create_sandbox
+
+            return await create_sandbox(sandbox_id)
         if is_desktop_run(_cfg):
             return create_desktop_backend(_cfg)
         return await ensure_sandbox_for_thread(
