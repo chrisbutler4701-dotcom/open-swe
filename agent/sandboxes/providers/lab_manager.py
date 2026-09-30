@@ -220,11 +220,11 @@ def create_lab_manager_sandbox(
 ) -> SandboxBackendProtocol:
     effective_base_url = (
         base_url
-        or ENV.get("LAB_MANAGER_BASE_URL", "http://172.18.0.1:8090/v1")
+        or ENV.LAB_MANAGER_BASE_URL.get()
     ).rstrip("/")
     effective_token = (
         token
-        or ENV.get("LAB_MANAGER_BEARER_TOKEN", "")
+        or ENV.LAB_MANAGER_BEARER_TOKEN.get()
     )
 
     if not effective_token:
@@ -257,11 +257,11 @@ def create_lab_manager_sandbox(
                 transport=transport,
             )
         else:
-            target_project = project or ENV.get("LAB_MANAGER_PROJECT", "")
+            target_project = project or ENV.LAB_MANAGER_PROJECT.get()
             if not target_project:
                 raise ValueError("Project key is required to create a Lab Manager sandbox")
-            target_task = task or ENV.get("LAB_MANAGER_TASK", "oswe-0-trial")
-            target_model = model or ENV.get("LAB_MANAGER_MODEL", "open-swe-worker")
+            target_task = task or ENV.LAB_MANAGER_TASK.get()
+            target_model = model or ENV.LAB_MANAGER_MODEL.get()
             create_payload: dict[str, Any] = {
                 "project": target_project,
                 "task": target_task,

@@ -390,9 +390,18 @@ ENV.var("OPEN_SWE_WRAPUP_TIMEOUT_SECONDS", "Time granted to wrap up after a time
 # --- Sandboxes ---------------------------------------------------------------------------------
 ENV.var(
     "SANDBOX_TYPE",
-    "Sandbox provider: langsmith, modal, daytona, runloop, e2b or local.",
+    "Sandbox provider: langsmith, modal, daytona, runloop, e2b, lab_manager or local.",
     default="langsmith",
 )
+ENV.var(
+    "LAB_MANAGER_BASE_URL",
+    "Base URL for the isolated Lab Manager sandbox provider.",
+    default="http://172.18.0.1:8090/v1",
+)
+ENV.var("LAB_MANAGER_BEARER_TOKEN", "Lab Manager bearer token.", secret=True)
+ENV.var("LAB_MANAGER_PROJECT", "Allowlisted Lab Manager project key for new sandboxes.")
+ENV.var("LAB_MANAGER_TASK", "Task label for new Lab Manager sandboxes.", default="oswe-0-trial")
+ENV.var("LAB_MANAGER_MODEL", "Worker identity label recorded by Lab Manager.", default="open-swe-worker")
 ENV.var("DEFAULT_SANDBOX_SNAPSHOT_FS_CAPACITY_BYTES", "Root filesystem size for new sandboxes.")
 ENV.var("DEFAULT_SANDBOX_VCPUS", "vCPUs for new sandboxes.")
 ENV.var("DEFAULT_SANDBOX_MEM_BYTES", "Memory for new sandboxes.")
