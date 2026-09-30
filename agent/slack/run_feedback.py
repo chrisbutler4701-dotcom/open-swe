@@ -128,7 +128,11 @@ def _submitted_comment(payload: JsonObject) -> str:
 async def _save_comment(metadata: RunFeedbackMetadata, comment: str) -> bool:
     client = langgraph_client()
     mapping = await lookup_slack_run_mapping(client, metadata.channel_id, metadata.message_ts)
-    if not mapping or mapping.get("run_id") != metadata.run_id:
+    if (
+        not mapping
+        or mapping.get("run_id") != metadata.run_id
+        or mapping.get("triggering_user_id") != metadata.user_id
+    ):
         return False
     async with slack_thread_mutation_lock(
         client,
@@ -163,6 +167,13 @@ async def handle_run_feedback_submission(payload: JsonObject) -> FeedbackRespons
             metadata = _metadata(payload)
             if metadata is None:
                 return _comment_error("This feedback is unavailable. Please try rating again.")
+            user = payload.get("user")
+            if not isinstance(user, dict) or user.get("id") != metadata.user_id:
+                return _comment_error("This feedback is unavailable. Please try rating again.")
+            if not (
+                await SlackChannel.context_for(metadata.channel_id, use_cache=False)
+            ).allows_operations:
+                return _comment_error("This feedback is unavailable. Please try rating again.")
             comment = _submitted_comment(payload)
             # An empty submit just re-confirms the rating the button already recorded;
             # saving would overwrite any comment stored earlier.
@@ -174,6 +185,39 @@ async def handle_run_feedback_submission(payload: JsonObject) -> FeedbackRespons
     except Exception:
         logger.exception("Could not save Slack reply feedback comment")
         return _comment_error("Your feedback could not be saved. Please try again.")
+
+
+async def open_run_feedback_note(interaction: SlackInteraction, action: SlackBlockAction) -> None:
+    selection = RunFeedbackValue.parse(parse_json_object((action.value or "{}").encode()))
+    channel_id, message_ts, user_id = (
+        interaction.channel_id,
+        interaction.message_ts,
+        interaction.user.id,
+    )
+    if selection is None or selection.rating != "down" or not interaction.trigger_id:
+        return
+    if not (channel_id and message_ts and user_id):
+        return
+    mapping = await lookup_slack_run_mapping(langgraph_client(), channel_id, message_ts)
+    if (
+        not mapping
+        or mapping.get("run_id") != selection.run_id
+        or mapping.get("triggering_user_id") != user_id
+    ):
+        return
+    if not (await SlackChannel.context_for(channel_id, use_cache=False)).allows_operations:
+        return
+    await open_slack_modal(
+        interaction.trigger_id,
+        comment_modal(
+            RunFeedbackMetadata(
+                run_id=selection.run_id,
+                channel_id=channel_id,
+                message_ts=message_ts,
+                user_id=user_id,
+            )
+        ),
+    )
 
 
 async def process_feedback(interaction: SlackInteraction, action: SlackBlockAction) -> None:
@@ -195,18 +239,6 @@ async def process_feedback(interaction: SlackInteraction, action: SlackBlockActi
         context = await SlackChannel.context_for(channel_id, use_cache=False)
         if not context.allows_operations:
             return
-        if selection.rating == "down" and interaction.trigger_id:
-            await open_slack_modal(
-                interaction.trigger_id,
-                comment_modal(
-                    RunFeedbackMetadata(
-                        run_id=selection.run_id,
-                        channel_id=channel_id,
-                        message_ts=message_ts,
-                        user_id=user_id,
-                    )
-                ),
-            )
         async with slack_thread_mutation_lock(
             client, channel_id, message_ts, purpose=f"run_feedback:{user_id}"
         ):

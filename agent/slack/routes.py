@@ -55,6 +55,7 @@ from agent.slack.run_feedback import (
     FEEDBACK_ACTION,
     handle_run_feedback_submission,
     is_run_feedback_submission,
+    open_run_feedback_note,
     process_feedback,
 )
 from agent.slack.solo_threads import allow_solo_thread_followup
@@ -778,6 +779,7 @@ async def slack_interactivity(
             (action for action in interaction.actions if action.action_id == FEEDBACK_ACTION), None
         )
         if feedback_action is not None:
+            await open_run_feedback_note(interaction, feedback_action)
             background_tasks.add_task(process_feedback, interaction, feedback_action)
             return {}
 
