@@ -54,7 +54,7 @@ redispatch. Exactly one create POST occurred.
 | Pre-persistence fault probe JSON | `e35c0eb565c56406040c9682ab3570fca1ed9e4ef494359fd477bf801a708565` |
 | Verified MPC patch | `7c546a112ebf71b487ac09ac925b0bb1fac0ccb37c2c5e5c9cca9e4f0f7c8c6b` |
 | Open SWE source/test diff from pin | `b5d509cdb9843109d183ae8acef78c7d0feb96896d9a7476127b98a576f6649b` |
-| Allina source/test diff from preparation base | `53d1fb40295596e174b7f7366855ca98ba960d86ec4361ba70d7b7e007b44189` |
+| Allina source/test diff from preparation base | `756854f41539f96875895a47586bad7ce396eb3f1541e407d27046bfc3c40105` |
 
 Detailed transcripts stay outside Git. The review package was scanned for credential
 values; this document contains identities and content hashes only.
