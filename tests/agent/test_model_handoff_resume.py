@@ -112,3 +112,31 @@ async def test_resume_after_model_handoff(
     assert isinstance(result["messages"][-1], AIMessage)
     assert result["messages"][-1].content == settings["model_id"]
     assert (await resumed.aget_state(config)).next == ()
+
+
+async def test_proposal_only_factory_removes_external_tools_and_subagents(
+    monkeypatch: pytest.MonkeyPatch,
+    factory_settings: ThreadSettings,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def assemble(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        graph = MagicMock()
+        graph.with_config.return_value = graph
+        return graph
+
+    monkeypatch.setattr(server, "create_deep_agent", assemble)
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": "proposal-only",
+            "__is_for_execution__": True,
+            "source": "desktop",
+            "proposal_only": True,
+        }
+    }
+
+    await server.build_agent(config)
+
+    assert captured["tools"] == []
+    assert captured["subagents"] == []

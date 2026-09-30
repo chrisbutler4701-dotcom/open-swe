@@ -164,6 +164,9 @@ class RunConfig(BaseModel):
     slack_ask: bool | None = None
     # First run of a thread broken out from another Slack thread.
     slack_breakout: bool | None = None
+    # Isolated proposal-only coding runs keep the engineering graph and sandbox
+    # middleware while removing network, publication, recreation, and subagent tools.
+    proposal_only: bool = False
     # Slash command callback the `/oswe` acknowledgement is replaced through.
     slack_ask_response_url: str | None = None
     # Set on a private thread whose transcript was copied from a collaborative one.

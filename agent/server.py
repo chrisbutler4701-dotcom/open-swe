@@ -1293,6 +1293,7 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     configurable = config.get("configurable") or {}
     cfg = RunConfig.parse(configurable)
     thread_id = cfg.thread_id
+    proposal_only = cfg.proposal_only is True
 
     config["recursion_limit"] = DEFAULT_RECURSION_LIMIT
 
@@ -1554,6 +1555,8 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     )
 
     def make_fallback_model(primary_model_id: str) -> BaseChatModel | None:
+        if proposal_only:
+            return None
         fallback_model_id = ENV.LLM_FALLBACK_MODEL_ID.optional() or fallback_model_id_for(
             primary_model_id
         )
@@ -1734,7 +1737,9 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         static_tools,
         {"expose_port": {"jwks_url": service_identity_jwks_url()}},
     )
-    if local_run:
+    if local_run and proposal_only:
+        static_tools = []
+    elif local_run:
         static_tools = apply_tool_descriptions([http_request, fetch_url, web_search])
     elif stop_summary_mode:
         static_tools = apply_tool_descriptions([slack_read_thread_messages, slack_reply])
@@ -1892,7 +1897,9 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
             model=main_model,
             system_prompt="",
             tools=static_tools,
-            subagents=[
+            subagents=[]
+            if proposal_only
+            else [
                 _general_purpose_subagent(
                     subagent_model,
                     tools=[tool for tool in static_tools if tool is not save_user_settings],
