@@ -1,7 +1,7 @@
-
 import base64
 import logging
 import shlex
+import uuid
 from typing import Any
 
 import httpx
@@ -51,7 +51,7 @@ class LabManagerSandbox(BaseSandbox):
     def id(self) -> str:
         return self._run_id
 
-    def read(self, file_path: str, offset: int = 0, limit: int | None = None):
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000):
         if not file_path.startswith("/"):
             file_path = f"/workspace/{file_path}"
         return super().read(file_path, offset=offset, limit=limit)
@@ -73,46 +73,62 @@ class LabManagerSandbox(BaseSandbox):
         timeout: int | None = None,
     ) -> ExecuteResponse:
         effective_timeout = timeout or self._default_timeout
-        url = f"/labs/{self._run_id}/exec"
+        if len(command) <= 7500:
+            return self._execute_remote(command, effective_timeout)
 
-        if len(command) > 7500:
-            import base64
-            b64 = base64.b64encode(command.encode("utf-8")).decode("ascii")
-            chunk_size = 3000
-            chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
+        stage_id = uuid.uuid4().hex
+        encoded_path = f"/tmp/open-swe-{stage_id}.b64"
+        script_path = f"/tmp/open-swe-{stage_id}.sh"
+        quoted_encoded_path = shlex.quote(encoded_path)
+        quoted_script_path = shlex.quote(script_path)
+        encoded = base64.b64encode(command.encode("utf-8")).decode("ascii")
+        chunks = [encoded[index : index + 3000] for index in range(0, len(encoded), 3000)]
+        cleanup = f"rm -f {quoted_encoded_path} {quoted_script_path}"
+        try:
+            self._require_staging_success(
+                self._execute_remote(
+                    f"umask 077 && : > {quoted_encoded_path} && rm -f {quoted_script_path}",
+                    30,
+                ),
+                "initialize",
+            )
+            for chunk in chunks:
+                self._require_staging_success(
+                    self._execute_remote(
+                        f"printf %s {shlex.quote(chunk)} >> {quoted_encoded_path}", 30
+                    ),
+                    "append",
+                )
+        except Exception:
             try:
-                self._client.post(
-                    url,
-                    json={"command": "rm -f /tmp/_lm_b64 /tmp/_lm_cmd.sh"},
-                    timeout=30.0,
-                )
-                for chunk in chunks:
-                    self._client.post(
-                        url,
-                        json={"command": f"printf '%s' '{chunk}' >> /tmp/_lm_b64"},
-                        timeout=30.0,
+                cleanup_result = self._execute_remote(cleanup, 30)
+                if cleanup_result.exit_code != 0:
+                    logger.warning(
+                        "Lab Manager staging cleanup failed",
+                        extra={"run_id": self._run_id, "stage_id": stage_id},
                     )
-                exec_cmd = (
-                    "base64 -d /tmp/_lm_b64 > /tmp/_lm_cmd.sh && chmod +x /tmp/_lm_cmd.sh && "
-                    "bash /tmp/_lm_cmd.sh; rc=$?; rm -f /tmp/_lm_b64 /tmp/_lm_cmd.sh; exit $rc"
+            except Exception:
+                logger.warning(
+                    "Lab Manager staging cleanup request failed",
+                    extra={"run_id": self._run_id, "stage_id": stage_id},
+                    exc_info=True,
                 )
-                payload = {
-                    "command": exec_cmd,
-                    "timeout_seconds": effective_timeout,
-                }
-            except httpx.RequestError as exc:
-                raise LabManagerError(f"Lab Manager request failed: {exc}") from exc
-        else:
-            payload = {
-                "command": command,
-                "timeout_seconds": effective_timeout,
-            }
+            raise
 
+        execute_staged = (
+            f"base64 -d {quoted_encoded_path} > {quoted_script_path} && "
+            f"chmod 700 {quoted_script_path} && bash {quoted_script_path}; "
+            f"rc=$?; {cleanup}; exit $rc"
+        )
+        return self._execute_remote(execute_staged, effective_timeout)
+
+    def _execute_remote(self, command: str, timeout: int) -> ExecuteResponse:
+        url = f"/labs/{self._run_id}/exec"
         try:
             resp = self._client.post(
                 url,
-                json=payload,
-                timeout=float(effective_timeout) + 30.0,
+                json={"command": command, "timeout_seconds": timeout},
+                timeout=float(timeout) + 30.0,
             )
         except httpx.RequestError as exc:
             raise LabManagerError(f"Lab Manager request failed: {exc}") from exc
@@ -130,19 +146,31 @@ class LabManagerSandbox(BaseSandbox):
         exit_code = int(data.get("exit_code", 1))
         stdout = data.get("stdout", "")
         stderr = data.get("stderr", "")
-        output = stdout + (("\n" if stdout and not stdout.endswith("\n") else "") + stderr if stderr else "")
+        output = stdout + (
+            ("\n" if stdout and not stdout.endswith("\n") else "") + stderr if stderr else ""
+        )
         return ExecuteResponse(output=output, exit_code=exit_code, truncated=False)
+
+    def _require_staging_success(self, response: ExecuteResponse, operation: str) -> None:
+        if response.exit_code != 0:
+            raise LabManagerError(
+                f"Lab Manager command staging {operation} failed with exit "
+                f"{response.exit_code}: {response.output[:200]}"
+            )
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         responses: list[FileUploadResponse] = []
         for path, content in files:
             try:
                 b64_content = base64.b64encode(content).decode("ascii")
+                program = (
+                    "import base64, os, sys; p = sys.argv[1]; "
+                    "os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True); "
+                    "open(p, 'wb').write(base64.b64decode(sys.argv[2]))"
+                )
                 script = (
-                    f"python3 -c \"import base64, os, sys; "
-                    f"p = {shlex.quote(path)}; "
-                    f"os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True); "
-                    f"open(p, \x27wb\x27).write(base64.b64decode({shlex.quote(b64_content)}))\""
+                    f"python3 -c {shlex.quote(program)} {shlex.quote(path)} "
+                    f"{shlex.quote(b64_content)}"
                 )
                 res = self.execute(script)
                 if res.exit_code == 0:
@@ -162,11 +190,11 @@ class LabManagerSandbox(BaseSandbox):
         responses: list[FileDownloadResponse] = []
         for path in paths:
             try:
-                script = (
-                    f"python3 -c \"import base64, sys, os; "
-                    f"p = {shlex.quote(path)}; "
-                    f"sys.stdout.write(base64.b64encode(open(p, \x27rb\x27).read()).decode(\x27ascii\x27))\""
+                program = (
+                    "import base64, sys; p = sys.argv[1]; "
+                    "sys.stdout.write(base64.b64encode(open(p, 'rb').read()).decode('ascii'))"
                 )
+                script = f"python3 -c {shlex.quote(program)} {shlex.quote(path)}"
                 res = self.execute(script)
                 if res.exit_code == 0:
                     raw_bytes = base64.b64decode(res.output.strip())
@@ -218,14 +246,8 @@ def create_lab_manager_sandbox(
     ref: str | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> SandboxBackendProtocol:
-    effective_base_url = (
-        base_url
-        or ENV.LAB_MANAGER_BASE_URL.get()
-    ).rstrip("/")
-    effective_token = (
-        token
-        or ENV.LAB_MANAGER_BEARER_TOKEN.get()
-    )
+    effective_base_url = (base_url or ENV.LAB_MANAGER_BASE_URL.get()).rstrip("/")
+    effective_token = token or ENV.LAB_MANAGER_BEARER_TOKEN.get()
 
     if not effective_token:
         raise ValueError("LAB_MANAGER_BEARER_TOKEN is required for lab_manager provider")
@@ -249,7 +271,9 @@ def create_lab_manager_sandbox(
             state = resp.json()
             if state.get("status") == "destroyed":
                 raise SandboxGoneError(f"Lab {sandbox_id} has been destroyed")
-            logger.info("Reattached to Lab Manager sandbox %s (status=%s)", sandbox_id, state.get("status"))
+            logger.info(
+                "Reattached to Lab Manager sandbox %s (status=%s)", sandbox_id, state.get("status")
+            )
             return LabManagerSandbox(
                 run_id=sandbox_id,
                 base_url=effective_base_url,

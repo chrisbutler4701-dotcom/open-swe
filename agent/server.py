@@ -1609,7 +1609,7 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     sandbox_file_downloads = _sandbox_file_downloads_enabled(cfg)
     mcp_tools: list[Any] = []
     notion_tools: list[Any] = []
-    if not stop_summary_mode and not local_run and credential_scope_known:
+    if not proposal_only and not stop_summary_mode and not local_run and credential_scope_known:
         mcp_tools, notion_tools = await asyncio.gather(
             _phase_result(
                 thread_id,
@@ -1748,7 +1748,7 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         static_tools,
         {"expose_port": {"jwks_url": service_identity_jwks_url()}},
     )
-    if local_run and proposal_only:
+    if proposal_only:
         static_tools = []
     elif local_run:
         static_tools = apply_tool_descriptions([http_request, fetch_url, web_search])

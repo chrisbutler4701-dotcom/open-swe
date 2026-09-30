@@ -114,9 +114,11 @@ async def test_resume_after_model_handoff(
     assert (await resumed.aget_state(config)).next == ()
 
 
+@pytest.mark.parametrize("source", ["desktop", "dashboard"])
 async def test_proposal_only_factory_removes_external_tools_and_subagents(
     monkeypatch: pytest.MonkeyPatch,
     factory_settings: ThreadSettings,
+    source: str,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -127,11 +129,15 @@ async def test_proposal_only_factory_removes_external_tools_and_subagents(
         return graph
 
     monkeypatch.setattr(server, "create_deep_agent", assemble)
+    mcp_loader = AsyncMock(return_value=[MagicMock(name="external_mcp")])
+    notion_loader = AsyncMock(return_value=[MagicMock(name="external_notion")])
+    monkeypatch.setattr(server, "_mcp_tools_for", mcp_loader)
+    monkeypatch.setattr(server, "_notion_tools_for", notion_loader)
     config: RunnableConfig = {
         "configurable": {
             "thread_id": "proposal-only",
             "__is_for_execution__": True,
-            "source": "desktop",
+            "source": source,
             "proposal_only": True,
         }
     }
@@ -141,3 +147,5 @@ async def test_proposal_only_factory_removes_external_tools_and_subagents(
     assert captured["tools"] == []
     assert captured["subagents"] == []
     assert captured["skills"] == []
+    mcp_loader.assert_not_awaited()
+    notion_loader.assert_not_awaited()

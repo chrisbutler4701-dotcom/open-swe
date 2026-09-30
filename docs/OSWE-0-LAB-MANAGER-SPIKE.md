@@ -29,6 +29,18 @@ agent.graphs.agent:traced_agent
   -> LabManagerSandbox
 ```
 
+## Source-review repairs
+
+The accepted connected trial remains historical evidence and was not re-run. The
+review branch now applies proposal-only exclusion to every invocation source,
+including nonlocal dashboard construction, and never loads MCP or Notion tools for
+that profile. Lab Manager file transfer now passes paths as quoted process arguments.
+Long commands use per-invocation staging files, validate every staging response,
+stop on staging failure, and cannot collide when commands overlap.
+
+Focused regressions cover nonlocal proposal-only tool exclusion, ordinary and
+special-character file paths, failed staging, and overlapping long commands.
+
 ## Connected evidence
 
 - Tested branch head: `1374e84956276d1e1d6c58e73eae960f62e5a037`
@@ -53,8 +65,8 @@ redispatch. Exactly one create POST occurred.
 | Passing trial JSON | `97125595617833cc211d5575ad6639693dd46dd2dacd2f57bd9775262be8ed78` |
 | Pre-persistence fault probe JSON | `e35c0eb565c56406040c9682ab3570fca1ed9e4ef494359fd477bf801a708565` |
 | Verified MPC patch | `7c546a112ebf71b487ac09ac925b0bb1fac0ccb37c2c5e5c9cca9e4f0f7c8c6b` |
-| Open SWE source/test diff from pin | `b5d509cdb9843109d183ae8acef78c7d0feb96896d9a7476127b98a576f6649b` |
-| Allina source/test diff from preparation base | `f31531941d7a3ab8985f2c73189e2c0c1fe22f124bb8ec55d50dbbc2bfe6ef04` |
+| Open SWE source/test diff from pin | `0713b0653c77ae8a686b2f728a03244b727d11c772e204aa7fec83f572442090` |
+| Allina source/test diff from preparation base | `e8a61e71b060ba3033f91ad91a5dd10f7a37f623edd7902adf95a61352c21a64` |
 
 Detailed transcripts stay outside Git. The review package was scanned for credential
 values; this document contains identities and content hashes only.
@@ -68,4 +80,6 @@ separately recovered.
 
 Before any production consideration, review provider transport assumptions, async
 behavior, the proposal-only tool surface, model registration, and compatibility with
-current upstream. Do not enable production routing during this review.
+current upstream. The 16 affected tests and repository-wide Ruff, format, and type
+checks passed; type checking retained nine unrelated warnings. Do not enable
+production routing during this review.

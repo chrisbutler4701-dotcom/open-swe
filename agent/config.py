@@ -401,7 +401,9 @@ ENV.var(
 ENV.var("LAB_MANAGER_BEARER_TOKEN", "Lab Manager bearer token.", secret=True)
 ENV.var("LAB_MANAGER_PROJECT", "Allowlisted Lab Manager project key for new sandboxes.")
 ENV.var("LAB_MANAGER_TASK", "Task label for new Lab Manager sandboxes.", default="oswe-0-trial")
-ENV.var("LAB_MANAGER_MODEL", "Worker identity label recorded by Lab Manager.", default="open-swe-worker")
+ENV.var(
+    "LAB_MANAGER_MODEL", "Worker identity label recorded by Lab Manager.", default="open-swe-worker"
+)
 ENV.var("DEFAULT_SANDBOX_SNAPSHOT_FS_CAPACITY_BYTES", "Root filesystem size for new sandboxes.")
 ENV.var("DEFAULT_SANDBOX_VCPUS", "vCPUs for new sandboxes.")
 ENV.var("DEFAULT_SANDBOX_MEM_BYTES", "Memory for new sandboxes.")
