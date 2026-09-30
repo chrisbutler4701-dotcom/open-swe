@@ -1517,6 +1517,10 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         model_id, profile_effort = image_model_override
         subagent_model_id, subagent_effort = image_model_override
 
+    if proposal_only:
+        subagent_model_id, subagent_effort = model_id, profile_effort
+        title_model_id, title_effort = model_id, profile_effort
+
     # A `/oswe` question runs on the asker's own default model, and never routes
     # adaptively: one question gets one answer, so there is nothing to route.
     if slack_ask_mode:
@@ -1771,30 +1775,36 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
 
     logger.info("Returning agent with sandbox for thread %s", thread_id)
     agent_backend: BackendProtocol = backend
-    skill_routes: dict[str, BackendProtocol] = {
-        BUNDLED_SKILLS_ROUTE: ReadOnlyBackend(
-            FilesystemBackend(root_dir=BUNDLED_SKILLS_DIR, virtual_mode=True)
-        ),
-    }
-    if is_desktop_run(cfg):
-        skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(StateBackend())
-        skill_sources = [USER_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
-        # The default backend is the user's project, so offloads would land in
-        # their repository. Keep the agent's scratch files out of it.
-        skill_routes.update(await desktop_artifact_routes(thread_id))
+    if proposal_only:
+        skill_sources = []
     else:
-        skill_routes[ORGANIZATION_SKILLS_ROUTE] = ReadOnlyBackend(
-            StoreBackend(namespace=lambda _runtime: (ORGANIZATION_SKILLS_NAMESPACE,))
-        )
-        skill_sources = [ORGANIZATION_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
-        if credential_login:
-            skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(
-                StoreBackend(
-                    namespace=lambda _runtime, login=credential_login: (SKILLS_NAMESPACE, login)
-                )
+        skill_routes: dict[str, BackendProtocol] = {
+            BUNDLED_SKILLS_ROUTE: ReadOnlyBackend(
+                FilesystemBackend(root_dir=BUNDLED_SKILLS_DIR, virtual_mode=True)
             )
-            skill_sources.insert(0, USER_SKILLS_ROUTE)
-    agent_backend = CompositeBackend(default=backend, routes=skill_routes)
+        }
+        if is_desktop_run(cfg):
+            skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(StateBackend())
+            skill_sources = [USER_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
+            # The default backend is the user's project, so offloads would land in
+            # their repository. Keep the agent's scratch files out of it.
+            skill_routes.update(await desktop_artifact_routes(thread_id))
+        else:
+            skill_routes[ORGANIZATION_SKILLS_ROUTE] = ReadOnlyBackend(
+                StoreBackend(namespace=lambda _runtime: (ORGANIZATION_SKILLS_NAMESPACE,))
+            )
+            skill_sources = [ORGANIZATION_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
+            if credential_login:
+                skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(
+                    StoreBackend(
+                        namespace=lambda _runtime, login=credential_login: (
+                            SKILLS_NAMESPACE,
+                            login,
+                        )
+                    )
+                )
+                skill_sources.insert(0, USER_SKILLS_ROUTE)
+        agent_backend = CompositeBackend(default=backend, routes=skill_routes)
     main_model = _make_model_or_defer(model_id, use_gateway=use_gateway, **model_kwargs)
     requested_models = (
         available_requested_models(fable_enabled=fable_enabled)

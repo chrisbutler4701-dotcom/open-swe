@@ -140,3 +140,4 @@ async def test_proposal_only_factory_removes_external_tools_and_subagents(
 
     assert captured["tools"] == []
     assert captured["subagents"] == []
+    assert captured["skills"] == []
