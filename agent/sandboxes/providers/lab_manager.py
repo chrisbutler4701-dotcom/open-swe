@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import base64
 import logging
@@ -60,10 +59,40 @@ class LabManagerSandbox(BaseSandbox):
     ) -> ExecuteResponse:
         effective_timeout = timeout or self._default_timeout
         url = f"/labs/{self._run_id}/exec"
-        payload = {
-            "command": command,
-            "timeout_seconds": effective_timeout,
-        }
+
+        if len(command) > 7500:
+            import base64
+            b64 = base64.b64encode(command.encode("utf-8")).decode("ascii")
+            chunk_size = 3000
+            chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
+            try:
+                self._client.post(
+                    url,
+                    json={"command": "rm -f /tmp/_lm_b64 /tmp/_lm_cmd.sh"},
+                    timeout=30.0,
+                )
+                for chunk in chunks:
+                    self._client.post(
+                        url,
+                        json={"command": f"printf '%s' '{chunk}' >> /tmp/_lm_b64"},
+                        timeout=30.0,
+                    )
+                exec_cmd = (
+                    "base64 -d /tmp/_lm_b64 > /tmp/_lm_cmd.sh && chmod +x /tmp/_lm_cmd.sh && "
+                    "bash /tmp/_lm_cmd.sh; rc=$?; rm -f /tmp/_lm_b64 /tmp/_lm_cmd.sh; exit $rc"
+                )
+                payload = {
+                    "command": exec_cmd,
+                    "timeout_seconds": effective_timeout,
+                }
+            except httpx.RequestError as exc:
+                raise LabManagerError(f"Lab Manager request failed: {exc}") from exc
+        else:
+            payload = {
+                "command": command,
+                "timeout_seconds": effective_timeout,
+            }
+
         try:
             resp = self._client.post(
                 url,
