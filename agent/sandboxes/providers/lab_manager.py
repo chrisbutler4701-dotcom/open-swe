@@ -51,6 +51,21 @@ class LabManagerSandbox(BaseSandbox):
     def id(self) -> str:
         return self._run_id
 
+    def read(self, file_path: str, offset: int = 0, limit: int | None = None):
+        if not file_path.startswith("/"):
+            file_path = f"/workspace/{file_path}"
+        return super().read(file_path, offset=offset, limit=limit)
+
+    def write(self, file_path: str, content: str):
+        if not file_path.startswith("/"):
+            file_path = f"/workspace/{file_path}"
+        return super().write(file_path, content)
+
+    def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False):
+        if not file_path.startswith("/"):
+            file_path = f"/workspace/{file_path}"
+        return super().edit(file_path, old_string, new_string, replace_all=replace_all)
+
     def execute(
         self,
         command: str,
