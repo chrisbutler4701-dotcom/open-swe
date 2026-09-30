@@ -1293,6 +1293,7 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     configurable = config.get("configurable") or {}
     cfg = RunConfig.parse(configurable)
     thread_id = cfg.thread_id
+    proposal_only = cfg.proposal_only is True
 
     config["recursion_limit"] = DEFAULT_RECURSION_LIMIT
 
@@ -1324,6 +1325,13 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         _thread_id: str = thread_id,
         _cfg: RunConfig = cfg,
     ) -> SandboxBackendProtocol:
+        if proposal_only:
+            sandbox_id = (config.get("metadata") or {}).get("sandbox_id")
+            if not isinstance(sandbox_id, str) or not sandbox_id:
+                raise ValueError("proposal-only runs require a bound sandbox_id")
+            from agent.sandboxes.providers.registry import create_sandbox
+
+            return await create_sandbox(sandbox_id)
         if is_desktop_run(_cfg):
             return create_desktop_backend(_cfg)
         return await ensure_sandbox_for_thread(
@@ -1516,6 +1524,10 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         model_id, profile_effort = image_model_override
         subagent_model_id, subagent_effort = image_model_override
 
+    if proposal_only:
+        subagent_model_id, subagent_effort = model_id, profile_effort
+        title_model_id, title_effort = model_id, profile_effort
+
     # A `/oswe` question runs on the asker's own default model, and never routes
     # adaptively: one question gets one answer, so there is nothing to route.
     if slack_ask_mode:
@@ -1554,6 +1566,8 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     )
 
     def make_fallback_model(primary_model_id: str) -> BaseChatModel | None:
+        if proposal_only:
+            return None
         fallback_model_id = ENV.LLM_FALLBACK_MODEL_ID.optional() or fallback_model_id_for(
             primary_model_id
         )
@@ -1595,7 +1609,7 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
     sandbox_file_downloads = _sandbox_file_downloads_enabled(cfg)
     mcp_tools: list[Any] = []
     notion_tools: list[Any] = []
-    if not stop_summary_mode and not local_run and credential_scope_known:
+    if not proposal_only and not stop_summary_mode and not local_run and credential_scope_known:
         mcp_tools, notion_tools = await asyncio.gather(
             _phase_result(
                 thread_id,
@@ -1734,7 +1748,9 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
         static_tools,
         {"expose_port": {"jwks_url": service_identity_jwks_url()}},
     )
-    if local_run:
+    if proposal_only:
+        static_tools = []
+    elif local_run:
         static_tools = apply_tool_descriptions([http_request, fetch_url, web_search])
     elif stop_summary_mode:
         static_tools = apply_tool_descriptions([slack_read_thread_messages, slack_reply])
@@ -1766,30 +1782,36 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
 
     logger.info("Returning agent with sandbox for thread %s", thread_id)
     agent_backend: BackendProtocol = backend
-    skill_routes: dict[str, BackendProtocol] = {
-        BUNDLED_SKILLS_ROUTE: ReadOnlyBackend(
-            FilesystemBackend(root_dir=BUNDLED_SKILLS_DIR, virtual_mode=True)
-        ),
-    }
-    if is_desktop_run(cfg):
-        skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(StateBackend())
-        skill_sources = [USER_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
-        # The default backend is the user's project, so offloads would land in
-        # their repository. Keep the agent's scratch files out of it.
-        skill_routes.update(await desktop_artifact_routes(thread_id))
+    if proposal_only:
+        skill_sources = []
     else:
-        skill_routes[ORGANIZATION_SKILLS_ROUTE] = ReadOnlyBackend(
-            StoreBackend(namespace=lambda _runtime: (ORGANIZATION_SKILLS_NAMESPACE,))
-        )
-        skill_sources = [ORGANIZATION_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
-        if credential_login:
-            skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(
-                StoreBackend(
-                    namespace=lambda _runtime, login=credential_login: (SKILLS_NAMESPACE, login)
-                )
+        skill_routes: dict[str, BackendProtocol] = {
+            BUNDLED_SKILLS_ROUTE: ReadOnlyBackend(
+                FilesystemBackend(root_dir=BUNDLED_SKILLS_DIR, virtual_mode=True)
             )
-            skill_sources.insert(0, USER_SKILLS_ROUTE)
-    agent_backend = CompositeBackend(default=backend, routes=skill_routes)
+        }
+        if is_desktop_run(cfg):
+            skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(StateBackend())
+            skill_sources = [USER_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
+            # The default backend is the user's project, so offloads would land in
+            # their repository. Keep the agent's scratch files out of it.
+            skill_routes.update(await desktop_artifact_routes(thread_id))
+        else:
+            skill_routes[ORGANIZATION_SKILLS_ROUTE] = ReadOnlyBackend(
+                StoreBackend(namespace=lambda _runtime: (ORGANIZATION_SKILLS_NAMESPACE,))
+            )
+            skill_sources = [ORGANIZATION_SKILLS_ROUTE, BUNDLED_SKILLS_ROUTE]
+            if credential_login:
+                skill_routes[USER_SKILLS_ROUTE] = ReadOnlyBackend(
+                    StoreBackend(
+                        namespace=lambda _runtime, login=credential_login: (
+                            SKILLS_NAMESPACE,
+                            login,
+                        )
+                    )
+                )
+                skill_sources.insert(0, USER_SKILLS_ROUTE)
+        agent_backend = CompositeBackend(default=backend, routes=skill_routes)
     main_model = _make_model_or_defer(model_id, use_gateway=use_gateway, **model_kwargs)
     requested_models = (
         available_requested_models(fable_enabled=fable_enabled)
@@ -1892,7 +1914,9 @@ async def build_agent(config: RunnableConfig, *, tool_surface: ToolSurface | Non
             model=main_model,
             system_prompt="",
             tools=static_tools,
-            subagents=[
+            subagents=[]
+            if proposal_only
+            else [
                 _general_purpose_subagent(
                     subagent_model,
                     tools=[tool for tool in static_tools if tool is not save_user_settings],

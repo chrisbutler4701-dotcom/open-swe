@@ -27,6 +27,7 @@ SANDBOX_FACTORIES: dict[str, tuple[str, str]] = {
     "runloop": ("agent.sandboxes.providers.runloop", "create_runloop_sandbox"),
     "e2b": ("agent.sandboxes.providers.e2b", "create_e2b_sandbox"),
     "local": ("agent.sandboxes.providers.local", "create_local_sandbox"),
+    "lab_manager": ("agent.sandboxes.providers.lab_manager", "create_lab_manager_sandbox"),
 }
 
 # Providers whose SDKs live in an optional dependency group rather than the base

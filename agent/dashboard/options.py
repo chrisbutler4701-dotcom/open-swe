@@ -70,6 +70,14 @@ SUPPORTED_MODELS: list[ModelOption] = [
         "supports_images": True,
     },
     {
+        "id": "google_genai:gemini-3.5-flash-lite",
+        "label": "Gemini 3.5 Flash Lite",
+        "efforts": ["minimal", "low", "medium", "high"],
+        "default_effort": "minimal",
+        "supports_images": True,
+        "can_be_default": False,
+    },
+    {
         "id": "fireworks:accounts/fireworks/models/kimi-k3",
         "label": "Kimi K3",
         # K3 always reasons and only accepts low/high/max — "medium" is rejected.
