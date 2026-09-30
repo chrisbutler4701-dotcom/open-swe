@@ -551,7 +551,7 @@ describe("WorkspaceSettingsPanel", () => {
     fireEvent.click(trigger)
 
     // Core prefers acme/api, and OSS can still default to it.
-    const option = await screen.findByRole("button", { name: "acme/api" })
+    const option = await screen.findByRole("option", { name: "acme/api" })
     expect(option.closest("section")).toBeNull()
     expect(screen.getAllByText("acme/oss").length).toBeGreaterThan(1)
   })
